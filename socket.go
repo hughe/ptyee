@@ -10,11 +10,13 @@ import (
 
 // socketManager manages a Unix socket with single-client semantics.
 type socketManager struct {
-	listener  net.Listener
-	conn      net.Conn
-	connMu    sync.RWMutex
-	outWriter OutputWriter
-	format    OutputFormat
+	listener   net.Listener
+	conn       net.Conn
+	connMu     sync.RWMutex
+	outWriter  OutputWriter
+	format     OutputFormat
+	connReady  chan struct{} // Signals when first connection is established
+	connReadyOnce sync.Once   // Ensures connReady is closed only once
 }
 
 // newSocketManager creates a socket manager and starts listening on the specified path.
@@ -30,8 +32,9 @@ func newSocketManager(socketPath string, format OutputFormat) (*socketManager, e
 	}
 
 	return &socketManager{
-		listener: listener,
-		format:   format,
+		listener:  listener,
+		format:    format,
+		connReady: make(chan struct{}),
 	}, nil
 }
 
@@ -61,6 +64,12 @@ func (sm *socketManager) acceptConnection(ctx context.Context) error {
 		// Accept this connection
 		sm.conn = conn
 		sm.outWriter = newOutputWriter(sm.format, conn)
+
+		// Signal that first connection is ready
+		sm.connReadyOnce.Do(func() {
+			close(sm.connReady)
+		})
+
 		sm.connMu.Unlock()
 
 		// Wait for context cancellation or connection close
@@ -99,6 +108,17 @@ func (sm *socketManager) getConnection() net.Conn {
 	sm.connMu.RLock()
 	defer sm.connMu.RUnlock()
 	return sm.conn
+}
+
+// waitForFirstConnection blocks until the first client connects to the socket.
+// Returns an error if the context is cancelled before a connection is established.
+func (sm *socketManager) waitForFirstConnection(ctx context.Context) error {
+	select {
+	case <-sm.connReady:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // close closes the socket manager and cleans up resources.

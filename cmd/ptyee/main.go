@@ -23,6 +23,7 @@ func run() error {
 	socketPath := flag.String("socket", "/tmp/ptyee.socket", "Unix socket path for monitoring/injection")
 	tagOutput := flag.Bool("tag-output", false, "Prefix each byte with 'T' (terminal) or 'P' (program)")
 	jsonlOutput := flag.Bool("jsonl-output", false, "Output JSONL format (not yet implemented)")
+	noWait := flag.Bool("no-wait", false, "Don't wait for socket connection before starting command")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [OPTIONS] -- COMMAND [ARGS...]\n", os.Args[0])
@@ -61,12 +62,13 @@ func run() error {
 
 	// Build configuration
 	cfg := ptyee.Config{
-		Command:      args,
-		SocketPath:   *socketPath,
-		OutputFormat: format,
-		Stdin:        os.Stdin,
-		Stdout:       os.Stdout,
-		Stderr:       os.Stderr,
+		Command:           args,
+		SocketPath:        *socketPath,
+		OutputFormat:      format,
+		WaitForConnection: !*noWait, // Wait by default, unless --no-wait is specified
+		Stdin:             os.Stdin,
+		Stdout:            os.Stdout,
+		Stderr:            os.Stderr,
 	}
 
 	// Create PTYTee instance

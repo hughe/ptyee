@@ -42,6 +42,12 @@ type Config struct {
 	// Stderr is the output destination for errors.
 	// If nil, defaults to os.Stderr.
 	Stderr io.Writer
+
+	// WaitForConnection, if true, waits for a client to connect to the
+	// socket before starting the command. This prevents output from being
+	// lost if the client connects after the program starts.
+	// Defaults to true.
+	WaitForConnection bool
 }
 
 // validate checks the config for required fields and sets defaults.

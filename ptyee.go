@@ -49,14 +49,29 @@ func NewPTYTee(cfg Config) (*PTYTee, error) {
 
 // Run executes the PTY session until the command completes or context is cancelled.
 func (p *PTYTee) Run(ctx context.Context) error {
-	// Start PTY
+	defer p.cleanup()
+
+	// Use errgroup for coordinated goroutine management
+	g, gctx := errgroup.WithContext(ctx)
+
+	// Start accepting socket connections
+	g.Go(func() error {
+		return p.socketMgr.acceptConnection(gctx)
+	})
+
+	// Wait for first connection if configured
+	if p.cfg.WaitForConnection {
+		if err := p.socketMgr.waitForFirstConnection(ctx); err != nil {
+			return fmt.Errorf("waiting for connection: %w", err)
+		}
+	}
+
+	// Start PTY and command
 	ptmx, err := pty.Start(p.cmd)
 	if err != nil {
-		p.socketMgr.close()
 		return fmt.Errorf("failed to start PTY: %w", err)
 	}
 	p.ptmx = ptmx
-	defer p.cleanup()
 
 	// Setup terminal raw mode if stdin is a terminal
 	termState, err := setupRawMode(int(p.cfg.Stdin.(*os.File).Fd()))
@@ -72,14 +87,6 @@ func (p *PTYTee) Run(ctx context.Context) error {
 			fmt.Fprintf(p.cfg.Stderr, "Warning: %v\n", err)
 		}
 	}
-
-	// Use errgroup for coordinated goroutine management
-	g, gctx := errgroup.WithContext(ctx)
-
-	// Goroutine 1: Accept socket connections
-	g.Go(func() error {
-		return p.socketMgr.acceptConnection(gctx)
-	})
 
 	// Goroutine 2: Handle window size changes
 	if stdin, ok := p.cfg.Stdin.(*os.File); ok {
