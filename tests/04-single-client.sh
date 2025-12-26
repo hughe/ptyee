@@ -12,7 +12,7 @@ echo "Test 4: Single client enforcement"
 rm -f "$SOCKET"
 
 # Start ptyee with a long-running command
-timeout 5 ./build/ptyee --socket "$SOCKET" -- sleep 10 &
+./build/ptyee --socket "$SOCKET" -- sleep 3 2>/dev/null &
 PTYEE_PID=$!
 
 # Wait for socket
@@ -24,13 +24,13 @@ for i in {1..10}; do
 done
 
 # Connect first client
-timeout 4 nc -U "$SOCKET" > /tmp/client1.out 2>&1 &
+nc -U "$SOCKET" > /tmp/client1.out 2>&1 &
 CLIENT1_PID=$!
 
 sleep 0.5
 
 # Try to connect second client - should be rejected
-timeout 2 nc -U "$SOCKET" > /tmp/client2.out 2>&1 &
+nc -U "$SOCKET" > /tmp/client2.out 2>&1 &
 CLIENT2_PID=$!
 
 sleep 0.5

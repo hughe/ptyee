@@ -14,7 +14,7 @@ rm -f "$SOCKET" "$OUTPUT_FILE"
 
 # Start ptyee with Python REPL
 (sleep 1; echo "print('hello from python')"; sleep 0.5; echo "exit()") | \
-    timeout 5 ./build/ptyee --socket "$SOCKET" -- python3 &
+    ./build/ptyee --socket "$SOCKET" -- python3 2>/dev/null &
 PTYEE_PID=$!
 
 # Wait for socket
@@ -26,10 +26,13 @@ for i in {1..10}; do
 done
 
 # Read from socket
-timeout 4 nc -U "$SOCKET" > "$OUTPUT_FILE" 2>&1 &
+nc -U "$SOCKET" > "$OUTPUT_FILE" 2>&1 &
 NC_PID=$!
 
-wait $NC_PID 2>/dev/null || true
+# Give it time to complete, then clean up
+sleep 3
+kill $NC_PID 2>/dev/null || true
+
 wait $PTYEE_PID 2>/dev/null || true
 
 # Check for Python output

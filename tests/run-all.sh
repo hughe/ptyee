@@ -25,6 +25,7 @@ TESTS=(
     "tests/04-single-client.sh"
     "tests/05-interactive-python.sh"
     "tests/06-wait-for-connection.sh"
+    "tests/07-signal-handling.sh"
 )
 
 PASSED=0

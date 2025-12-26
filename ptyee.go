@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"golang.org/x/sync/errgroup"
@@ -50,6 +51,10 @@ func NewPTYTee(cfg Config) (*PTYTee, error) {
 // Run executes the PTY session until the command completes or context is cancelled.
 func (p *PTYTee) Run(ctx context.Context) error {
 	defer p.cleanup()
+
+	// Create cancellable context to stop all goroutines when command completes
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	// Use errgroup for coordinated goroutine management
 	g, gctx := errgroup.WithContext(ctx)
@@ -113,7 +118,9 @@ func (p *PTYTee) Run(ctx context.Context) error {
 
 	// Goroutine 6: Wait for command completion
 	g.Go(func() error {
-		return p.waitForCommand(gctx)
+		err := p.waitForCommand(gctx)
+		cancel() // Cancel context when command completes to stop all other goroutines
+		return err
 	})
 
 	// Wait for all goroutines (will complete when command finishes or context cancelled)
@@ -202,28 +209,14 @@ func (p *PTYTee) copySocketToPty(ctx context.Context) error {
 
 		conn := p.socketMgr.getConnection()
 		if conn == nil {
-			// No connection yet, wait a bit
+			// No connection yet, wait a bit before retrying
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-func() <-chan struct{} {
-				ch := make(chan struct{})
-				go func() {
-					// Brief sleep before retry
-					for i := 0; i < 10; i++ {
-						select {
-						case <-ctx.Done():
-							close(ch)
-							return
-						default:
-						}
-					}
-					close(ch)
-				}()
-				return ch
-			}():
+			case <-time.After(100 * time.Millisecond):
+				// Brief sleep before retry
+				continue
 			}
-			continue
 		}
 
 		n, err := conn.Read(buf)

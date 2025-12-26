@@ -6,17 +6,18 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 )
 
 // socketManager manages a Unix socket with single-client semantics.
 type socketManager struct {
-	listener   net.Listener
-	conn       net.Conn
-	connMu     sync.RWMutex
-	outWriter  OutputWriter
-	format     OutputFormat
-	connReady  chan struct{} // Signals when first connection is established
-	connReadyOnce sync.Once   // Ensures connReady is closed only once
+	listener      *net.UnixListener
+	conn          *net.UnixConn
+	connMu        sync.RWMutex
+	outWriter     OutputWriter
+	format        OutputFormat
+	connReady     chan struct{} // Signals when first connection is established
+	connReadyOnce sync.Once     // Ensures connReady is closed only once
 }
 
 // newSocketManager creates a socket manager and starts listening on the specified path.
@@ -31,39 +32,57 @@ func newSocketManager(socketPath string, format OutputFormat) (*socketManager, e
 		return nil, fmt.Errorf("failed to create socket listener: %w", err)
 	}
 
+	unixListener, ok := listener.(*net.UnixListener)
+	if !ok {
+		return nil, fmt.Errorf("expected UnixListener, got %T", listener)
+	}
+
+	// Automatically unlink socket file on close
+	unixListener.SetUnlinkOnClose(true)
+
 	return &socketManager{
-		listener:  listener,
+		listener:  unixListener,
 		format:    format,
 		connReady: make(chan struct{}),
 	}, nil
 }
 
-// acceptConnection accepts a single client connection.
-// Additional connection attempts will be rejected with an error message.
+// acceptConnection accepts a single client connection and continues to listen.
+// Additional connection attempts will be silently closed without error messages.
 func (sm *socketManager) acceptConnection(ctx context.Context) error {
+	// Set accept deadline for periodic context checking
+
 	for {
-		conn, err := sm.listener.Accept()
+		// Use a moderate deadline to check context periodically without too much overhead
+		sm.listener.SetDeadline(time.Now().Add(100 * time.Millisecond))
+
+		unixConn, err := sm.listener.AcceptUnix()
 		if err != nil {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-				return fmt.Errorf("accept error: %w", err)
+			// Check if it's a timeout error (expected)
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				// Check context after timeout
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					continue // Timeout is expected, try again
+				}
 			}
+			// Non-timeout error
+			return fmt.Errorf("accept error: %w", err)
 		}
 
 		sm.connMu.Lock()
 		if sm.conn != nil {
-			// Already have a connection, reject this one
+			// Already have a connection, close this one without writing error
 			sm.connMu.Unlock()
-			conn.Write([]byte("ERROR: only one client allowed\n"))
-			conn.Close()
+			unixConn.Close()
 			continue
 		}
 
 		// Accept this connection
-		sm.conn = conn
-		sm.outWriter = newOutputWriter(sm.format, conn)
+		sm.conn = unixConn
+		sm.outWriter = newOutputWriter(sm.format, unixConn)
 
 		// Signal that first connection is ready
 		sm.connReadyOnce.Do(func() {
@@ -72,9 +91,7 @@ func (sm *socketManager) acceptConnection(ctx context.Context) error {
 
 		sm.connMu.Unlock()
 
-		// Wait for context cancellation or connection close
-		<-ctx.Done()
-		return ctx.Err()
+		// Continue accepting (and rejecting) additional connections
 	}
 }
 
@@ -104,7 +121,7 @@ func (sm *socketManager) writeFromProgram(b byte) error {
 
 // getConnection returns the current client connection for reading.
 // Returns nil if no client is connected.
-func (sm *socketManager) getConnection() net.Conn {
+func (sm *socketManager) getConnection() *net.UnixConn {
 	sm.connMu.RLock()
 	defer sm.connMu.RUnlock()
 	return sm.conn
